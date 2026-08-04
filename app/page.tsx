@@ -90,11 +90,19 @@ export default function Home() {
   async function submit(action: string, extra: Record<string, unknown> = {}) {
     setBusy(true); setError("");
     try {
-      const body = session ? { action, ...session, ...extra } : { action, ...extra };
+      let previousSession: Session | undefined;
+      if (action === "create") {
+        const savedPrevious = localStorage.getItem("racko-previous-session");
+        if (savedPrevious) {
+          try { previousSession = JSON.parse(savedPrevious) as Session; } catch { localStorage.removeItem("racko-previous-session"); }
+        }
+      }
+      const body = session ? { action, ...session, ...extra } : { action, ...extra, ...(previousSession ? { previousSession } : {}) };
       const data = await api("/api/game", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       if (data.playerId) {
         const active = { code: data.code, playerId: data.playerId, token: data.token };
         setSession(active); localStorage.setItem("racko-session", JSON.stringify(active));
+        if (action === "create") localStorage.removeItem("racko-previous-session");
       }
       if (data.game) setGame(data.game);
       setScreen("game");
@@ -109,6 +117,7 @@ export default function Home() {
   }
 
   function leave() {
+    if (session) localStorage.setItem("racko-previous-session", JSON.stringify(session));
     localStorage.removeItem("racko-session"); setSession(null); setGame(null); setScreen("home"); setError("");
   }
 

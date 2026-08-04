@@ -73,7 +73,7 @@ revoke all on public.player_statistics from anon, authenticated;
 
 -- Entfernt Partien, die seit mindestens einer Stunde auf keinem Gerät mehr
 -- geöffnet sind. Da die Zeile direkt gelöscht wird, fließt die Partie nicht
--- in die Statistik ein. Der Auftrag läuft alle zehn Minuten.
+-- in die Statistik ein. Der Auftrag läuft jede Minute.
 create extension if not exists pg_cron;
 
 do $$
@@ -91,8 +91,8 @@ begin
 
   perform cron.schedule(
     'cleanup-inactive-racko-games',
-    '*/10 * * * *',
-    $cleanup$delete from public.games where last_active_at < now() - interval '1 hour'$cleanup$
+    '* * * * *',
+    $cleanup$delete from public.games where last_active_at < now() - interval '15 minutes'$cleanup$
   );
 end
 $$;

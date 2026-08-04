@@ -31,7 +31,7 @@ Die vollständige Spielpartie wird nur serverseitig mit dem Supabase-Service-Sch
 
 ## Inaktive Spiele
 
-Solange mindestens ein Spieler die Partie geöffnet hat, wird ihre Aktivität automatisch erneuert. Ist ein Spiel oder Warteraum eine volle Stunde lang auf keinem Gerät mehr aktiv, löscht Supabase die Partie beim nächsten zehnminütigen Bereinigungslauf. Abgebrochene Partien werden nicht in der Statistik erfasst.
+Solange mindestens ein Spieler die Partie geöffnet hat, wird ihre Aktivität automatisch erneuert. Ist ein Spiel oder Warteraum 15 Minuten lang auf keinem Gerät mehr aktiv, löscht Supabase die Partie beim nächsten minütlichen Bereinigungslauf. Erstellt ein Spieler nach dem Verlassen eine neue Partie, wird seine vorherige Partie direkt entfernt. Abgebrochene Partien werden nicht in der Statistik erfasst.
 
 Spieländerungen werden über Supabase Realtime übertragen. Eine Aktivitätsmeldung läuft nur alle fünf Minuten; ein 15-sekündiger Abgleich wird ausschließlich verwendet, solange die Realtime-Verbindung unterbrochen ist.
 

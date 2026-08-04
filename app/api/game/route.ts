@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createPlayer, finishRound, isRacko, nextTurn, startRound } from "@/lib/game";
+import { createPlayer, finishRound, isRacko, nextTurn, shuffle, startRound } from "@/lib/game";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { GameState, GameView, PLAYER_NAMES, PlayerName } from "@/lib/types";
 
@@ -61,6 +61,21 @@ async function notifyGame(code: string) {
   }
 }
 
+async function deletePreviousGame(previous: unknown) {
+  if (!previous || typeof previous !== "object") return;
+  const candidate = previous as { code?: string; playerId?: string; token?: string };
+  if (!candidate.code || !candidate.playerId || !candidate.token) return;
+  try {
+    const code = candidate.code.toUpperCase();
+    const { state } = await loadGame(code);
+    authenticate(state, candidate.playerId, candidate.token);
+    await getSupabaseAdmin().from("games").delete().eq("code", code);
+    await notifyGame(code);
+  } catch {
+    // Die frühere Partie kann bereits automatisch entfernt worden sein.
+  }
+}
+
 async function saveGame(code: string, state: GameState, version: number) {
   const supabase = getSupabaseAdmin();
   const now = new Date().toISOString();
@@ -103,6 +118,7 @@ export async function POST(request: NextRequest) {
       const state: GameState = { code, hostId: host.id, playerCount, totalRounds, currentRound: 1, startingPlayerIndex: 0, status: "lobby", players: [host], deck: [], discard: [], turnIndex: 0, drawnCard: null, drawnFrom: null, awaitingRacko: false, roundResults: [], gameWinnerIds: [], message: `${name} hat das Spiel erstellt.` };
       const { error } = await getSupabaseAdmin().from("games").insert({ code, state });
       if (error) throw error;
+      await deletePreviousGame(body.previousSession);
       return NextResponse.json({ code, playerId: host.id, token: host.token, game: viewFor(state, host.id) });
     }
 
@@ -149,7 +165,7 @@ export async function POST(request: NextRequest) {
         if (!deck.length) {
           if (discard.length <= 1) return responseError("Es sind keine Karten mehr verfügbar.");
           const top = discard.pop()!;
-          deck = discard.sort(() => Math.random() - 0.5);
+          deck = shuffle(discard);
           discard = [top];
         }
         state = { ...state, drawnCard: deck.pop()!, drawnFrom: "deck", deck, discard, message: `${player.name} hat verdeckt gezogen.` };
