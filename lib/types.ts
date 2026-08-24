@@ -41,6 +41,7 @@ export interface GameState {
   drawnFrom: "deck" | "discard" | null;
   awaitingRacko: boolean;
   roundResults: RoundResult[];
+  extraRoundVotes?: string[];
   gameWinnerIds: string[];
   message: string;
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { ArrowDown, Copy, Crown, Layers3, LogIn, Plus, RotateCcw, Trophy, Users } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { GameView, LeaderboardEntry, ListedGame, PLAYER_NAMES, PlayerName } from "@/lib/types";
@@ -203,13 +203,24 @@ function Game({ game, busy, error, act, leave }: { game: GameView; busy: boolean
 
   if (game.status === "round_end" || game.status === "finished") {
     const selected = game.players.find((player) => player.id === selectedPlayerId) ?? game.players[0];
-    return <main className="game-shell"><GameHeader game={game} leave={leave}/><PlayerStrip game={game} selectedPlayerId={selected.id} onSelect={setSelectedPlayerId}/><section className="results panel">
-    <Crown size={38}/><span className="eyebrow">{game.status === "finished" ? "SPIEL BEENDET" : `RUNDE ${game.currentRound} BEENDET`}</span>
-    <h1>{game.status === "finished" ? `${game.players.filter((p) => game.gameWinnerIds.includes(p.id)).map((p) => p.name).join(" & ")} gewinnt!` : game.message}</h1>
-    <div className="result-list">{[...game.players].sort((a,b) => b.totalScore-a.totalScore).map((player, index) => { const result = game.roundResults.find((r) => r.playerId === player.id); return <div className="result-row" key={player.id}><span>{index + 1}</span><strong>{player.name}</strong><small>{result ? `Runde +${result.total}` : `${player.rackos} Rack’o`}</small><b>{player.totalScore} Pkt.</b></div> })}</div>
-    <div className="revealed-hand"><p><strong>{selected.name}s Karten</strong><span>Spieler oben auswählen</span></p><div className="result-cards">{selected.hand?.map((card, index) => <PlayingCard card={card} index={index} maxCard={game.playerCount === 2 ? 50 : game.playerCount === 3 ? 60 : 75} key={index}/>)}</div></div>
-    {game.status === "round_end" && game.isHost && <button className="main-button" disabled={busy} onClick={() => act("nextRound")}>{game.currentRound === game.totalRounds ? "Spiel abschließen" : "Nächste Runde"}</button>}
-    {game.status === "round_end" && !game.isHost && <p className="waiting">Warte auf den Gastgeber …</p>}
+    const isFinished = game.status === "finished";
+    const hasVotedForExtraRound = (game.extraRoundVotes ?? []).includes(game.myPlayerId);
+    const rankedPlayers = [...game.players].sort((a, b) => isFinished
+      ? b.totalScore - a.totalScore
+      : (game.roundResults.find((result) => result.playerId === b.id)?.total ?? 0) - (game.roundResults.find((result) => result.playerId === a.id)?.total ?? 0));
+    return <main className="game-shell"><GameHeader game={game} leave={leave}/><PlayerStrip game={game} selectedPlayerId={selected.id} onSelect={setSelectedPlayerId}/><section className={`results panel ${isFinished ? "final-results" : "round-results"}`}>
+    <Crown size={38}/><span className="eyebrow">{isFinished ? "SPIEL BEENDET" : `ERGEBNIS RUNDE ${game.currentRound}`}</span>
+    <h1>{isFinished ? `${game.players.filter((p) => game.gameWinnerIds.includes(p.id)).map((p) => p.name).join(" & ")} gewinnt!` : game.message}</h1>
+    <p className="result-heading">{isFinished ? "Gesamtpunkte des Spiels" : "Punkte dieser Runde"}</p>
+    <div className="result-list">{rankedPlayers.map((player, index) => { const result = game.roundResults.find((r) => r.playerId === player.id); const displayedScore = isFinished ? player.totalScore : result?.total ?? 0; return <div className="result-row" key={player.id}><span>{index + 1}</span><strong>{player.name}</strong><div className="result-score"><small>{isFinished ? "Gesamt" : "Diese Runde"}</small><b>{isFinished ? displayedScore : `+${displayedScore}`} <em>Pkt.</em></b></div></div> })}</div>
+    <div className="revealed-hand"><p><strong>{selected.name}s Karten</strong><span>Spieler oben auswählen</span></p><div className="result-cards">{selected.hand?.map((card, index) => <PlayingCard card={card} maxCard={game.playerCount === 2 ? 50 : game.playerCount === 3 ? 60 : 75} key={index}/>)}</div></div>
+    {game.status === "round_end" && game.currentRound < game.totalRounds && game.isHost && <button className="main-button" disabled={busy} onClick={() => act("nextRound")}>Nächste Runde</button>}
+    {game.status === "round_end" && game.currentRound < game.totalRounds && !game.isHost && <p className="waiting">Warte auf den Gastgeber …</p>}
+    {game.status === "round_end" && game.currentRound >= game.totalRounds && <div className="game-ending-actions">
+      <button className="main-button finish-game" disabled={busy} onClick={() => act("finishGame")}>Endergebnis anzeigen</button>
+      <button className={`main-button extra-round ${hasVotedForExtraRound ? "my-vote" : ""}`} aria-pressed={hasVotedForExtraRound} disabled={busy} onClick={() => { if (!hasVotedForExtraRound) act("voteExtraRound"); }}><span>Weitere Runde spielen</span><span className="vote-indicators" aria-label={`${(game.extraRoundVotes ?? []).length} von ${game.players.length} Spielern möchten weiterspielen`}>{game.players.map((player) => <i className={(game.extraRoundVotes ?? []).includes(player.id) ? "voted" : ""} title={`${player.name}: ${(game.extraRoundVotes ?? []).includes(player.id) ? "zugestimmt" : "noch offen"}`} key={player.id}/>)}</span></button>
+      {hasVotedForExtraRound && <p className="waiting">Deine Stimme ist abgegeben. Die Zusatzrunde startet, sobald alle zugestimmt haben.</p>}
+    </div>}
     {game.status === "finished" && <button className="main-button" onClick={leave}>Zur Startseite</button>}
     {error && <p className="error">{error}</p>}
   </section></main>;
@@ -219,17 +230,17 @@ function Game({ game, busy, error, act, leave }: { game: GameView; busy: boolean
     <PlayerStrip game={game}/>
     <section className="table-area">
       <div className="portrait-board">
-        <section className="rack-section"><div className="rack-label"><p>Deine Karten</p><div className="turn-message"><span className={game.isMyTurn ? "pulse" : ""}/>{game.isMyTurn ? "Du bist am Zug" : `${current?.name} ist am Zug`}</div></div><div className="rack">{me.hand?.map((card, index) => <button aria-label={`Karte ${card} auf Platz ${index + 1}`} disabled={!game.isMyTurn || game.drawnCard === null || busy || pendingRackoSlot !== null} onClick={() => {
+        <section className="rack-section"><div className="rack-label"><p>Deine Karten</p><div className="turn-message"><span className={game.isMyTurn ? "pulse" : ""}/>{game.isMyTurn ? "Du bist am Zug" : `${current?.name} ist am Zug`}</div></div><div className="rack">{me.hand?.map((card, index) => <button style={{ zIndex: index + 1 }} aria-label={`Karte ${card} auf Platz ${index + 1}`} disabled={!game.isMyTurn || game.drawnCard === null || busy || pendingRackoSlot !== null} onClick={() => {
           const nextHand = me.hand!.map((value, slot) => slot === index ? game.drawnCard! : value);
           const fromFront = [...nextHand].reverse();
           const longest = getLongestRun(fromFront);
           if (fromFront.every((value, slot) => slot === 0 || fromFront[slot - 1] < value) && (!(game.directRunRequirement ?? 0) || longest >= game.directRunRequirement)) setPendingRackoSlot(index);
           else act("swap", { slot: index, declareRacko: false });
-        }} key={index}><PlayingCard card={card} index={index} maxCard={game.playerCount === 2 ? 50 : game.playerCount === 3 ? 60 : 75}/></button>)}</div></section>
+        }} key={index}><PlayingCard card={card} maxCard={game.playerCount === 2 ? 50 : game.playerCount === 3 ? 60 : 75}/></button>)}</div></section>
         <div className="piles">
           <div className={`drawn active-card ${game.drawnCard === null ? "empty-card" : ""}`}><span>AKTIVE KARTE</span>{game.drawnCard !== null && game.isMyTurn ? <><b>{game.drawnCard}</b><small>Links einen Platz wählen</small>{game.drawnFrom === "deck" && <button disabled={busy} onClick={() => act("discard")}>Ablegen</button>}</> : <small className="empty-hint">Noch keine Karte gezogen</small>}</div>
-          <button className="pile deck" disabled={!game.isMyTurn || game.drawnCard !== null || game.awaitingRacko || busy} onClick={() => act("draw", { source: "deck" })}><Layers3/><strong>Verdeckt</strong><small>{game.deckCount} Karten</small></button>
-          <button className="pile discard" disabled={!game.isMyTurn || game.drawnCard !== null || game.awaitingRacko || !topDiscard || busy} onClick={() => act("draw", { source: "discard" })}>{topDiscard ? <b>{topDiscard}</b> : <ArrowDown/>}<strong>Ablage</strong><small>{topDiscard ? "Offene Karte" : "Noch leer"}</small></button>
+          <button className="pile deck" disabled={!game.isMyTurn || game.drawnCard !== null || game.awaitingRacko || busy} onClick={() => act("draw", { source: "deck" })}>{game.isMyTurn && game.drawnCard === null && !game.awaitingRacko && !busy && <span className="draw-prompt">AUSWÄHLEN</span>}<Layers3/><strong>Verdeckt</strong><small>{game.deckCount} Karten</small></button>
+          <button className="pile discard" disabled={!game.isMyTurn || game.drawnCard !== null || game.awaitingRacko || !topDiscard || busy} onClick={() => act("draw", { source: "discard" })}>{game.isMyTurn && game.drawnCard === null && !game.awaitingRacko && Boolean(topDiscard) && !busy && <span className="draw-prompt">AUSWÄHLEN</span>}{topDiscard ? <b>{topDiscard}</b> : <ArrowDown/>}<strong>Ablage</strong><small>{topDiscard ? "Offene Karte" : "Noch leer"}</small></button>
         </div>
       </div>
       {pendingRackoSlot !== null && <div className="racko-overlay"><div className="racko-call"><Crown/><p>Deine Reihe ist vollständig.</p><strong>Möchtest du Rack’o sagen?</strong><button disabled={busy} onClick={() => { act("swap", { slot: pendingRackoSlot, declareRacko: true }); setPendingRackoSlot(null); }}><Crown/> RACK’O!</button><button className="continue" disabled={busy} onClick={() => { act("swap", { slot: pendingRackoSlot, declareRacko: false }); setPendingRackoSlot(null); }}><RotateCcw/> Für Bonus weiterspielen</button></div></div>}
@@ -261,9 +272,14 @@ function canRackoLocally(hand: number[], requirement: 0 | 3 | 4) {
   return cards.every((card, index) => index === 0 || cards[index - 1] < card) && (!requirement || getLongestRun(cards) >= requirement);
 }
 
-function PlayingCard({ card, index, maxCard }: { card: number; index: number; maxCard: number }) {
+function PlayingCard({ card, maxCard }: { card: number; maxCard: number }) {
   const position = 8 + ((card - 1) / (maxCard - 1)) * 84;
-  return <span className="playing-card"><small>{index + 1}</small><b className="corner top" style={{ left: `${position}%` }}>{card}</b></span>;
+  const hue = 150 - ((card - 1) / (maxCard - 1)) * 112;
+  const style = {
+    "--number-position": `${position}%`,
+    "--card-accent": `hsl(${hue} 42% 31%)`,
+  } as CSSProperties;
+  return <span className="playing-card" style={style}><b className="corner top">{card}</b></span>;
 }
 
 function PlayerStrip({ game, selectedPlayerId, onSelect }: { game: GameView; selectedPlayerId?: string; onSelect?: (id: string) => void }) {

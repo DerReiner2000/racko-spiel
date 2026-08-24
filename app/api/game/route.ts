@@ -115,7 +115,7 @@ export async function POST(request: NextRequest) {
       if (totalRounds < 1 || totalRounds > 20 || ![0, 3, 4].includes(directRunRequirement)) return responseError("Ungültige Spieleinstellungen.");
       const host = createPlayer(name);
       const code = makeCode();
-      const state: GameState = { code, hostId: host.id, playerCount: 2, directRunRequirement, totalRounds, currentRound: 1, startingPlayerIndex: 0, status: "lobby", players: [host], deck: [], discard: [], turnIndex: 0, drawnCard: null, drawnFrom: null, awaitingRacko: false, roundResults: [], gameWinnerIds: [], message: `${name} hat das Spiel erstellt.` };
+      const state: GameState = { code, hostId: host.id, playerCount: 2, directRunRequirement, totalRounds, currentRound: 1, startingPlayerIndex: 0, status: "lobby", players: [host], deck: [], discard: [], turnIndex: 0, drawnCard: null, drawnFrom: null, awaitingRacko: false, roundResults: [], extraRoundVotes: [], gameWinnerIds: [], message: `${name} hat das Spiel erstellt.` };
       const { error } = await getSupabaseAdmin().from("games").insert({ code, state });
       if (error) throw error;
       await deletePreviousGame(body.previousSession);
@@ -201,12 +201,23 @@ export async function POST(request: NextRequest) {
     } else if (body.action === "nextRound") {
       if (!isHost || state.status !== "round_end") return responseError("Die nächste Runde kann noch nicht gestartet werden.");
       if (state.currentRound >= state.totalRounds) {
-        const max = Math.max(...state.players.map((item) => item.totalScore));
-        state = { ...state, status: "finished", gameWinnerIds: state.players.filter((item) => item.totalScore === max).map((item) => item.id), message: "Das Spiel ist beendet." };
-        await updateStats(state);
+        return responseError("Für eine weitere Runde müssen alle Spieler zustimmen.");
       } else {
         state = startRound({ ...state, currentRound: state.currentRound + 1 });
       }
+    } else if (body.action === "voteExtraRound") {
+      if (state.status !== "round_end" || state.currentRound < state.totalRounds) return responseError("Über eine Zusatzrunde kann gerade nicht abgestimmt werden.");
+      const extraRoundVotes = [...new Set([...(state.extraRoundVotes ?? []), player.id])];
+      if (extraRoundVotes.length === state.players.length) {
+        state = startRound({ ...state, totalRounds: state.totalRounds + 1, currentRound: state.currentRound + 1, extraRoundVotes: [] });
+      } else {
+        state = { ...state, extraRoundVotes, message: `${player.name} möchte eine weitere Runde spielen.` };
+      }
+    } else if (body.action === "finishGame") {
+      if (state.status !== "round_end" || state.currentRound < state.totalRounds) return responseError("Das Spiel kann gerade nicht beendet werden.");
+      const max = Math.max(...state.players.map((item) => item.totalScore));
+      state = { ...state, status: "finished", extraRoundVotes: [], gameWinnerIds: state.players.filter((item) => item.totalScore === max).map((item) => item.id), message: `${player.name} hat das Endergebnis aufgerufen.` };
+      await updateStats(state);
     } else {
       return responseError("Unbekannte Aktion.");
     }

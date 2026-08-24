@@ -43,6 +43,7 @@ export function startRound(state: GameState): GameState {
     drawnFrom: null,
     awaitingRacko: false,
     roundResults: [],
+    extraRoundVotes: [],
     message: `${players[((state.startingPlayerIndex ?? 0) + state.currentRound - 1) % players.length].name} beginnt Runde ${state.currentRound}.`,
   };
 }
