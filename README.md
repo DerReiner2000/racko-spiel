@@ -2,6 +2,8 @@
 
 Private Mehrspieler-Web-App für 2–4 Personen. Enthalten sind Lobby und Spielcode, geheime Kartenhände, mehrere Runden, Rack’o- und Bonuswertung sowie eine dauerhafte Statistik-Rangliste.
 
+Beim Erstellen ist keine feste Spielerzahl nötig. Der Gastgeber startet die Lobby mit 2–4 anwesenden Spielern; die Kartenzahl wird daraus automatisch bestimmt. Optional kann Rack’o zusätzlich eine direkte Folge aus mindestens 3 oder 4 Karten voraussetzen. Nach der Namensauswahl zeigt die Anwendung wartende und bereits begonnene Partien. In laufende Partien können nur deren bisherige Teilnehmer zurückkehren.
+
 ## Supabase einrichten
 
 1. Ein neues Supabase-Projekt erstellen.

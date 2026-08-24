@@ -52,6 +52,10 @@ export function isRacko(hand: number[]) {
   return fromFront.length === 10 && fromFront.every((card, index) => index === 0 || fromFront[index - 1] < card);
 }
 
+export function canDeclareRacko(hand: number[], directRunRequirement: 0 | 3 | 4 = 0) {
+  return isRacko(hand) && (directRunRequirement === 0 || longestRun(hand) >= directRunRequirement);
+}
+
 export function baseScore(hand: number[]) {
   const fromFront = [...hand].reverse();
   if (!fromFront.length) return 0;

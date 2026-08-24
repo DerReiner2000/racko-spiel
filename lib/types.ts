@@ -28,6 +28,7 @@ export interface GameState {
   code: string;
   hostId: string;
   playerCount: 2 | 3 | 4;
+  directRunRequirement: 0 | 3 | 4;
   totalRounds: number;
   currentRound: number;
   startingPlayerIndex: number;
@@ -42,6 +43,18 @@ export interface GameState {
   roundResults: RoundResult[];
   gameWinnerIds: string[];
   message: string;
+}
+
+export interface ListedGame {
+  code: string;
+  hostName: PlayerName;
+  status: GameStatus;
+  playerNames: PlayerName[];
+  playerCount: number;
+  totalRounds: number;
+  directRunRequirement: 0 | 3 | 4;
+  canJoin: boolean;
+  canRejoin: boolean;
 }
 
 export interface PublicPlayer {

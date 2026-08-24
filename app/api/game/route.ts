@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createPlayer, finishRound, isRacko, nextTurn, shuffle, startRound } from "@/lib/game";
+import { canDeclareRacko, createPlayer, finishRound, nextTurn, shuffle, startRound } from "@/lib/game";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { GameState, GameView, PLAYER_NAMES, PlayerName } from "@/lib/types";
 
@@ -110,12 +110,12 @@ export async function POST(request: NextRequest) {
     if (body.action === "create") {
       const name = body.name as PlayerName;
       if (!PLAYER_NAMES.includes(name)) return responseError("Unbekannter Spieler.");
-      const playerCount = Number(body.playerCount) as 2 | 3 | 4;
       const totalRounds = Number(body.totalRounds);
-      if (![2, 3, 4].includes(playerCount) || totalRounds < 1 || totalRounds > 20) return responseError("Ungültige Spieleinstellungen.");
+      const directRunRequirement = Number(body.directRunRequirement ?? 0) as 0 | 3 | 4;
+      if (totalRounds < 1 || totalRounds > 20 || ![0, 3, 4].includes(directRunRequirement)) return responseError("Ungültige Spieleinstellungen.");
       const host = createPlayer(name);
       const code = makeCode();
-      const state: GameState = { code, hostId: host.id, playerCount, totalRounds, currentRound: 1, startingPlayerIndex: 0, status: "lobby", players: [host], deck: [], discard: [], turnIndex: 0, drawnCard: null, drawnFrom: null, awaitingRacko: false, roundResults: [], gameWinnerIds: [], message: `${name} hat das Spiel erstellt.` };
+      const state: GameState = { code, hostId: host.id, playerCount: 2, directRunRequirement, totalRounds, currentRound: 1, startingPlayerIndex: 0, status: "lobby", players: [host], deck: [], discard: [], turnIndex: 0, drawnCard: null, drawnFrom: null, awaitingRacko: false, roundResults: [], gameWinnerIds: [], message: `${name} hat das Spiel erstellt.` };
       const { error } = await getSupabaseAdmin().from("games").insert({ code, state });
       if (error) throw error;
       await deletePreviousGame(body.previousSession);
@@ -128,10 +128,17 @@ export async function POST(request: NextRequest) {
 
     if (body.action === "join") {
       const name = body.name as PlayerName;
-      if (state.status !== "lobby") return responseError("Dieses Spiel hat bereits begonnen.");
       if (!PLAYER_NAMES.includes(name)) return responseError("Unbekannter Spieler.");
-      if (state.players.some((player) => player.name === name)) return responseError(`${name} ist bereits im Spiel.`);
-      if (state.players.length >= state.playerCount) return responseError("Das Spiel ist bereits voll.");
+      const existing = state.players.find((player) => player.name === name);
+      if (existing) {
+        const token = crypto.randomUUID() + crypto.randomUUID();
+        state = { ...state, players: state.players.map((player) => player.id === existing.id ? { ...player, token, connectedAt: new Date().toISOString() } : player), message: `${name} ist wieder da.` };
+        await saveGame(code, state, loaded.version);
+        await notifyGame(code);
+        return NextResponse.json({ code, playerId: existing.id, token, game: viewFor(state, existing.id) });
+      }
+      if (state.status !== "lobby") return responseError("Dieses Spiel hat bereits begonnen. Nur frühere Teilnehmer können zurückkehren.");
+      if (state.players.length >= 4) return responseError("Das Spiel ist bereits voll.");
       const player = createPlayer(name);
       state = { ...state, players: [...state.players, player], message: `${name} ist beigetreten.` };
       await saveGame(code, state, loaded.version);
@@ -150,8 +157,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true });
     } else if (body.action === "start") {
       if (!isHost) return responseError("Nur der Gastgeber kann starten.");
-      if (state.status !== "lobby" || state.players.length !== state.playerCount) return responseError("Das Spiel ist noch nicht vollständig.");
-      state = startRound({ ...state, startingPlayerIndex: Math.floor(Math.random() * state.players.length) });
+      if (state.status !== "lobby" || state.players.length < 2 || state.players.length > 4) return responseError("Zum Start werden 2 bis 4 Spieler benötigt.");
+      state = startRound({ ...state, playerCount: state.players.length as 2 | 3 | 4, startingPlayerIndex: Math.floor(Math.random() * state.players.length) });
     } else if (body.action === "draw") {
       if (state.status !== "playing" || state.players[state.turnIndex].id !== player.id || state.drawnCard !== null || state.awaitingRacko) return responseError("Du kannst gerade keine Karte ziehen.");
       const source = body.source as "deck" | "discard";
@@ -179,7 +186,7 @@ export async function POST(request: NextRequest) {
       const updated = { ...state, players, discard: [...state.discard, oldCard], drawnCard: null, drawnFrom: null };
       const completedHand = players.find((item) => item.id === player.id)!.hand;
       if (body.declareRacko === true) {
-        if (!isRacko(completedHand)) return responseError("Diese Reihe ist noch nicht vollständig aufsteigend.");
+        if (!canDeclareRacko(completedHand, state.directRunRequirement ?? 0)) return responseError(state.directRunRequirement ? `Zusätzlich wird eine direkte Folge aus ${state.directRunRequirement} Karten benötigt.` : "Diese Reihe ist noch nicht vollständig aufsteigend.");
         state = finishRound(updated, player.id);
       } else {
         state = nextTurn(updated);
@@ -189,7 +196,7 @@ export async function POST(request: NextRequest) {
       state = nextTurn({ ...state, discard: [...state.discard, state.drawnCard] });
     } else if (body.action === "racko") {
       if (state.status !== "playing" || state.players[state.turnIndex].id !== player.id || state.drawnCard !== null) return responseError("Rack’o kann nur während deines Zuges vor dem Ziehen ausgerufen werden.");
-      if (!isRacko(player.hand)) return responseError("Deine Karten sind noch nicht vollständig aufsteigend.");
+      if (!canDeclareRacko(player.hand, state.directRunRequirement ?? 0)) return responseError(state.directRunRequirement ? `Zusätzlich wird eine direkte Folge aus ${state.directRunRequirement} Karten benötigt.` : "Deine Karten sind noch nicht vollständig aufsteigend.");
       state = finishRound(state, player.id);
     } else if (body.action === "nextRound") {
       if (!isHost || state.status !== "round_end") return responseError("Die nächste Runde kann noch nicht gestartet werden.");
