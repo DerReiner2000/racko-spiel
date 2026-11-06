@@ -2,6 +2,31 @@
 
 Private Mehrspieler-Web-App für 2–4 Personen. Enthalten sind Lobby und Spielcode, geheime Kartenhände, mehrere Runden, Rack’o- und Bonuswertung sowie eine dauerhafte Statistik-Rangliste.
 
+## Mobile-App und gemeinsamer Spielkern
+
+Die Android-/iOS-App befindet sich in `racko-offline-app/`. Sie ist als React-Native-App mit Expo umgesetzt und bietet lokales Spielen ohne Internet sowie Online-Partien gemeinsam mit Browser-Spielern. Der Online-Modus verwendet standardmäßig `https://racko-spiel.vercel.app`; die Serveradresse ist in der App einstellbar. Server, Browser und App verwenden denselben plattformunabhängigen Spielkern in `shared/game.ts`. Maßgeblich sind die bisherigen Online-Regeln; Sichtschutz und Geräteübergabe bleiben Besonderheiten des lokalen Modus.
+
+Die App unterstützt Online-Lobbys, Spielcodes, die gemeinsame Rangliste und Wiederverbindung. Details zu Einrichtung und Tests stehen in `docs/ONLINE_APP.md`, der ursprüngliche Regelabgleich in `docs/SPIELKERN.md`. Aktuell wird zuerst die Browser-Version weiterentwickelt: Dort kann der Gastgeber im Warteraum Bots auf Leicht oder Mittel hinzufügen. Die Züge laufen auf dem Server. Partien mit Bots sind Training ohne Ranglistenwertung. Einrichtung und Prüfung stehen in `docs/ONLINE_BOTS.md`; Bot-Verwaltung in der installierten App folgt später.
+
+Für Entwicklung und Builds das vollständige Repository verwenden: Auch die Mobile-App benötigt den übergeordneten Ordner `shared/`.
+
+Für die Bot-Entwicklung stehen jetzt ein erweiterter Beobachtungsvertrag, ausführbare Referenzstrategien und ein lokaler Simulator bereit. Datenformat, Integrationsschritte und tatsächlich ausgeführte Vergleichsläufe sind in [docs/BOT_UEBERGABE.md](docs/BOT_UEBERGABE.md) beschrieben. Die Referenzen sind noch nicht als Bot-Funktion in Lobby oder App aktiviert.
+
+Die mittlere Strategie erstellt inzwischen einen anpassbaren Plan aus der ausgeteilten Hand, bevor die erste Zugkarte bewertet wird. Ankerkarten, Austauschplätze und neue Vergleichsläufe sind in [docs/BOT_STARTPLAN.md](docs/BOT_STARTPLAN.md) dokumentiert.
+
+Die aktuellen leichten und mittleren Profile berücksichtigen zusätzlich Spielerzahl, Folgenpflicht und Rundenfortschritt. Datenformat, Schwierigkeitstrennung und gemischte Vergleichsergebnisse stehen in [docs/BOT_KONTEXT.md](docs/BOT_KONTEXT.md).
+
+## Regeln überprüfen
+
+```bash
+npm test
+npm run build
+```
+
+Eine vollständig lokale Browser-Vorschau mit Testdaten im Arbeitsspeicher lässt sich mit `npm run preview:online` starten. Sie benötigt keine Supabase-Verbindung und verändert keine Produktionspartien.
+
+Die Tests prüfen die bisherige Online-Austeilung anhand festgehaltener Referenzergebnisse, Regeln und Wertung, lokale v1-Spielstände sowie die Online-API ohne Datenbankzugriff. Zusätzlich werden Online- und lokale Spielzüge für alle Spielerzahlen und Zusatzregeln, gemischte App-/Browser-Partien und die mobile Wiederverbindung geprüft. Typecheck und Lint der App laufen mit `npm run typecheck` und `npm run lint` im Ordner `racko-offline-app/`.
+
 Beim Erstellen ist keine feste Spielerzahl nötig. Der Gastgeber startet die Lobby mit 2–4 anwesenden Spielern; die Kartenzahl wird daraus automatisch bestimmt. Optional kann Rack’o zusätzlich eine direkte Folge aus mindestens 3 oder 4 Karten voraussetzen. Nach der Namensauswahl zeigt die Anwendung wartende und bereits begonnene Partien. In laufende Partien können nur deren bisherige Teilnehmer zurückkehren.
 
 ## Supabase einrichten

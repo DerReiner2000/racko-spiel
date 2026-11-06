@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { canDeclareRacko, createPlayer, finishRound, nextTurn, shuffle, startRound } from "@/lib/game";
+import { createPlayer, GameRuleError, startRound } from "@/lib/game";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { GameState, GameView, PLAYER_NAMES, PlayerName } from "@/lib/types";
+import { addOnlineBot, advanceOnlineBots, applyOnlineAction, BOT_GAMES_RANKED, botDifficulty, changeOnlineBot, initializeBotRound, isBot } from "@/lib/online-bots";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
-function responseError(message: string, status = 400) {
-  return NextResponse.json({ error: message }, { status });
+class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly code: string) { super(message); }
+}
+
+function responseError(message: string, status = 400, code?: string) {
+  return NextResponse.json({ error: message, ...(code ? { code } : {}) }, { status });
 }
 
 function makeCode() {
@@ -17,16 +23,20 @@ function makeCode() {
 function viewFor(state: GameState, playerId: string): GameView {
   const mine = state.players.find((player) => player.id === playerId);
   if (!mine) throw new Error("Du gehörst nicht zu diesem Spiel.");
-  const { deck, players, ...publicState } = state;
+  const { deck, players, botRound, ...publicState } = state;
+  void botRound;
   return {
     ...publicState,
+    drawnCard: state.players[state.turnIndex]?.id === playerId || state.drawnFrom === "discard" ? state.drawnCard : null,
     deckCount: deck.length,
+    ...(!BOT_GAMES_RANKED && players.some(isBot) ? { statisticsMode: "training" as const } : {}),
     players: players.map((player) => ({
       id: player.id,
       name: player.name,
       roundScore: player.roundScore,
       totalScore: player.totalScore,
       rackos: player.rackos,
+      ...(isBot(player) ? { kind: "bot" as const, botDifficulty: player.botSettings.difficulty } : {}),
       ...(player.id === playerId || state.status === "round_end" || state.status === "finished" ? { hand: player.hand } : {}),
     })),
     isHost: state.hostId === playerId,
@@ -38,7 +48,8 @@ function viewFor(state: GameState, playerId: string): GameView {
 async function loadGame(code: string) {
   const supabase = getSupabaseAdmin();
   const { data, error } = await supabase.from("games").select("state, version").eq("code", code.toUpperCase()).single();
-  if (error || !data) throw new Error("Spiel nicht gefunden.");
+  if (error?.code === "PGRST116" || (!error && !data)) throw new ApiError("Spiel nicht gefunden.", 404, "GAME_NOT_FOUND");
+  if (error) throw error;
   return { state: data.state as GameState, version: data.version as number };
 }
 
@@ -80,19 +91,22 @@ async function saveGame(code: string, state: GameState, version: number) {
   const supabase = getSupabaseAdmin();
   const now = new Date().toISOString();
   const { data, error } = await supabase.from("games").update({ state, version: version + 1, updated_at: now, last_active_at: now }).eq("code", code).eq("version", version).select("version").single();
-  if (error || !data) throw new Error("Das Spiel wurde gleichzeitig geändert. Bitte erneut versuchen.");
+  if (error?.code === "PGRST116" || (!error && !data)) throw new ApiError("Das Spiel wurde gleichzeitig geändert. Bitte erneut versuchen.", 409, "VERSION_CONFLICT");
+  if (error) throw error;
 }
 
 function authenticate(state: GameState, playerId?: string, token?: string) {
-  const player = state.players.find((item) => item.id === playerId && item.token === token);
-  if (!player) throw new Error("Deine Spielanmeldung ist nicht mehr gültig.");
+  const player = state.players.find((item) => !isBot(item) && item.id === playerId && typeof token === "string" && !!token && item.token === token);
+  if (!player) throw new ApiError("Deine Spielanmeldung ist nicht mehr gültig.", 401, "SESSION_INVALID");
   return player;
 }
 
 async function updateStats(state: GameState) {
+  if (!BOT_GAMES_RANKED && state.players.some(isBot)) return;
   const supabase = getSupabaseAdmin();
   const max = Math.max(...state.players.map((player) => player.totalScore));
   for (const player of state.players) {
+    if (isBot(player)) continue;
     const { error } = await supabase.rpc("record_game_result", {
       p_player_name: player.name,
       p_games: 1,
@@ -104,6 +118,18 @@ async function updateStats(state: GameState) {
   }
 }
 
+async function runBots(loaded: { state: GameState; version: number }) {
+  const code = loaded.state.code;
+  return advanceOnlineBots(loaded, {
+    load: () => loadGame(code),
+    save: async (state, version) => {
+      try { await saveGame(code, state, version); return true; }
+      catch (error) { if (error instanceof ApiError && error.status === 409) return false; throw error; }
+    },
+    notify: () => notifyGame(code),
+  });
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -112,14 +138,14 @@ export async function POST(request: NextRequest) {
       if (!PLAYER_NAMES.includes(name)) return responseError("Unbekannter Spieler.");
       const totalRounds = Number(body.totalRounds);
       const directRunRequirement = Number(body.directRunRequirement ?? 0) as 0 | 3 | 4;
-      if (totalRounds < 1 || totalRounds > 20 || ![0, 3, 4].includes(directRunRequirement)) return responseError("Ungültige Spieleinstellungen.");
+      if (!Number.isInteger(totalRounds) || totalRounds < 1 || totalRounds > 20 || ![0, 3, 4].includes(directRunRequirement)) return responseError("Ungültige Spieleinstellungen.");
       const host = createPlayer(name);
       const code = makeCode();
       const state: GameState = { code, hostId: host.id, playerCount: 2, directRunRequirement, totalRounds, currentRound: 1, startingPlayerIndex: 0, status: "lobby", players: [host], deck: [], discard: [], turnIndex: 0, drawnCard: null, drawnFrom: null, awaitingRacko: false, roundResults: [], extraRoundVotes: [], gameWinnerIds: [], message: `${name} hat das Spiel erstellt.` };
       const { error } = await getSupabaseAdmin().from("games").insert({ code, state });
       if (error) throw error;
       await deletePreviousGame(body.previousSession);
-      return NextResponse.json({ code, playerId: host.id, token: host.token, game: viewFor(state, host.id) });
+      return NextResponse.json({ code, playerId: host.id, token: host.token, game: viewFor(state, host.id), version: 1 });
     }
 
     const code = String(body.code ?? "").toUpperCase();
@@ -129,13 +155,13 @@ export async function POST(request: NextRequest) {
     if (body.action === "join") {
       const name = body.name as PlayerName;
       if (!PLAYER_NAMES.includes(name)) return responseError("Unbekannter Spieler.");
-      const existing = state.players.find((player) => player.name === name);
+      const existing = state.players.find((player) => !isBot(player) && player.name === name);
       if (existing) {
         const token = crypto.randomUUID() + crypto.randomUUID();
-        state = { ...state, players: state.players.map((player) => player.id === existing.id ? { ...player, token, connectedAt: new Date().toISOString() } : player), message: `${name} ist wieder da.` };
+        state = { ...state, players: state.players.map((player) => player.id === existing.id && !isBot(player) ? { ...player, token, connectedAt: new Date().toISOString() } : player), message: `${name} ist wieder da.` };
         await saveGame(code, state, loaded.version);
         await notifyGame(code);
-        return NextResponse.json({ code, playerId: existing.id, token, game: viewFor(state, existing.id) });
+        return NextResponse.json({ code, playerId: existing.id, token, game: viewFor(state, existing.id), version: loaded.version + 1 });
       }
       if (state.status !== "lobby") return responseError("Dieses Spiel hat bereits begonnen. Nur frühere Teilnehmer können zurückkehren.");
       if (state.players.length >= 4) return responseError("Das Spiel ist bereits voll.");
@@ -143,89 +169,55 @@ export async function POST(request: NextRequest) {
       state = { ...state, players: [...state.players, player], message: `${name} ist beigetreten.` };
       await saveGame(code, state, loaded.version);
       await notifyGame(code);
-      return NextResponse.json({ code, playerId: player.id, token: player.token, game: viewFor(state, player.id) });
+      return NextResponse.json({ code, playerId: player.id, token: player.token, game: viewFor(state, player.id), version: loaded.version + 1 });
     }
 
     const player = authenticate(state, body.playerId, body.token);
     const isHost = player.id === state.hostId;
 
     if (body.action === "snapshot") {
+      const latest = await runBots(loaded);
+      authenticate(latest.state, body.playerId, body.token);
       await markActive(code);
-      return NextResponse.json({ game: viewFor(state, player.id) });
+      return NextResponse.json({ game: viewFor(latest.state, player.id), version: latest.version });
     } else if (body.action === "heartbeat") {
       await markActive(code);
+      await runBots(loaded);
       return NextResponse.json({ ok: true });
+    } else if (body.action === "addBot" || body.action === "removeBot" || body.action === "configureBot") {
+      if (!isHost) return responseError("Nur der Gastgeber kann Bots verwalten.");
+      state = body.action === "addBot"
+        ? addOnlineBot(state, botDifficulty(body.difficulty))
+        : changeOnlineBot(state, String(body.botId ?? ""), body.action === "configureBot" ? botDifficulty(body.difficulty) : undefined);
     } else if (body.action === "start") {
       if (!isHost) return responseError("Nur der Gastgeber kann starten.");
       if (state.status !== "lobby" || state.players.length < 2 || state.players.length > 4) return responseError("Zum Start werden 2 bis 4 Spieler benötigt.");
-      state = startRound({ ...state, playerCount: state.players.length as 2 | 3 | 4, startingPlayerIndex: Math.floor(Math.random() * state.players.length) });
+      state = initializeBotRound(startRound({ ...state, playerCount: state.players.length as 2 | 3 | 4, startingPlayerIndex: Math.floor(Math.random() * state.players.length) }), loaded.version + 1);
     } else if (body.action === "draw") {
-      if (state.status !== "playing" || state.players[state.turnIndex].id !== player.id || state.drawnCard !== null || state.awaitingRacko) return responseError("Du kannst gerade keine Karte ziehen.");
-      const source = body.source as "deck" | "discard";
-      if (source === "discard") {
-        if (!state.discard.length) return responseError("Der Ablagestapel ist leer.");
-        const discard = [...state.discard];
-        state = { ...state, drawnCard: discard.pop()!, drawnFrom: "discard", discard, message: `${player.name} hat die offene Karte genommen.` };
-      } else {
-        let deck = [...state.deck];
-        let discard = [...state.discard];
-        if (!deck.length) {
-          if (discard.length <= 1) return responseError("Es sind keine Karten mehr verfügbar.");
-          const top = discard.pop()!;
-          deck = shuffle(discard);
-          discard = [top];
-        }
-        state = { ...state, drawnCard: deck.pop()!, drawnFrom: "deck", deck, discard, message: `${player.name} hat verdeckt gezogen.` };
-      }
+      state = applyOnlineAction(state, player.id, { type: "draw", source: body.source === "discard" ? "discard" : "deck" }, loaded.version + 1);
     } else if (body.action === "swap") {
-      if (state.status !== "playing" || state.players[state.turnIndex].id !== player.id || state.drawnCard === null) return responseError("Du hast keine Karte zum Tauschen.");
-      const slot = Number(body.slot);
-      if (!Number.isInteger(slot) || slot < 0 || slot > 9) return responseError("Ungültiger Kartenplatz.");
-      const players = state.players.map((item) => item.id === player.id ? { ...item, hand: item.hand.map((card, index) => index === slot ? state.drawnCard! : card) } : item);
-      const oldCard = player.hand[slot];
-      const updated = { ...state, players, discard: [...state.discard, oldCard], drawnCard: null, drawnFrom: null };
-      const completedHand = players.find((item) => item.id === player.id)!.hand;
-      if (body.declareRacko === true) {
-        if (!canDeclareRacko(completedHand, state.directRunRequirement ?? 0)) return responseError(state.directRunRequirement ? `Zusätzlich wird eine direkte Folge aus ${state.directRunRequirement} Karten benötigt.` : "Diese Reihe ist noch nicht vollständig aufsteigend.");
-        state = finishRound(updated, player.id);
-      } else {
-        state = nextTurn(updated);
-      }
-    } else if (body.action === "discard") {
-      if (state.status !== "playing" || state.players[state.turnIndex].id !== player.id || state.drawnCard === null || state.drawnFrom !== "deck") return responseError("Diese Karte kann nicht abgelegt werden.");
-      state = nextTurn({ ...state, discard: [...state.discard, state.drawnCard] });
-    } else if (body.action === "racko") {
-      if (state.status !== "playing" || state.players[state.turnIndex].id !== player.id || state.drawnCard !== null) return responseError("Rack’o kann nur während deines Zuges vor dem Ziehen ausgerufen werden.");
-      if (!canDeclareRacko(player.hand, state.directRunRequirement ?? 0)) return responseError(state.directRunRequirement ? `Zusätzlich wird eine direkte Folge aus ${state.directRunRequirement} Karten benötigt.` : "Deine Karten sind noch nicht vollständig aufsteigend.");
-      state = finishRound(state, player.id);
+      state = applyOnlineAction(state, player.id, { type: "swap", slot: Number(body.slot), declareRacko: body.declareRacko === true }, loaded.version + 1);
+    } else if (body.action === "discard" || body.action === "racko") {
+      state = applyOnlineAction(state, player.id, { type: body.action }, loaded.version + 1);
     } else if (body.action === "nextRound") {
-      if (!isHost || state.status !== "round_end") return responseError("Die nächste Runde kann noch nicht gestartet werden.");
-      if (state.currentRound >= state.totalRounds) {
-        return responseError("Für eine weitere Runde müssen alle Spieler zustimmen.");
-      } else {
-        state = startRound({ ...state, currentRound: state.currentRound + 1 });
-      }
+      if (!isHost) return responseError("Die nächste Runde kann noch nicht gestartet werden.");
+      state = applyOnlineAction(state, player.id, { type: "nextRound" }, loaded.version + 1);
     } else if (body.action === "voteExtraRound") {
-      if (state.status !== "round_end" || state.currentRound < state.totalRounds) return responseError("Über eine Zusatzrunde kann gerade nicht abgestimmt werden.");
-      const extraRoundVotes = [...new Set([...(state.extraRoundVotes ?? []), player.id])];
-      if (extraRoundVotes.length === state.players.length) {
-        state = startRound({ ...state, totalRounds: state.totalRounds + 1, currentRound: state.currentRound + 1, extraRoundVotes: [] });
-      } else {
-        state = { ...state, extraRoundVotes, message: `${player.name} möchte eine weitere Runde spielen.` };
-      }
+      state = applyOnlineAction(state, player.id, { type: "voteExtraRound" }, loaded.version + 1);
     } else if (body.action === "finishGame") {
-      if (state.status !== "round_end" || state.currentRound < state.totalRounds) return responseError("Das Spiel kann gerade nicht beendet werden.");
-      const max = Math.max(...state.players.map((item) => item.totalScore));
-      state = { ...state, status: "finished", extraRoundVotes: [], gameWinnerIds: state.players.filter((item) => item.totalScore === max).map((item) => item.id), message: `${player.name} hat das Endergebnis aufgerufen.` };
-      await updateStats(state);
+      state = applyOnlineAction(state, player.id, { type: "finishGame" }, loaded.version + 1);
     } else {
       return responseError("Unbekannte Aktion.");
     }
 
     await saveGame(code, state, loaded.version);
+    if (body.action === "finishGame") await updateStats(state);
     await notifyGame(code);
-    return NextResponse.json({ game: viewFor(state, player.id) });
+    const latest = await runBots({ state, version: loaded.version + 1 });
+    return NextResponse.json({ game: viewFor(latest.state, player.id), version: latest.version });
   } catch (error) {
+    if (error instanceof ApiError) return responseError(error.message, error.status, error.code);
+    if (error instanceof GameRuleError) return responseError(error.message);
     console.error(error);
     return responseError(error instanceof Error ? error.message : "Unbekannter Fehler.", 500);
   }

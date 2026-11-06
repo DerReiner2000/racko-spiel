@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { GameState, ListedGame, PLAYER_NAMES, PlayerName } from "@/lib/types";
+import { isBot } from "@/lib/online-bots";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,7 @@ export async function GET(request: NextRequest) {
         directRunRequirement: state.directRunRequirement ?? 0,
         canJoin: state.status === "lobby" && state.players.length < 4 && !canRejoin,
         canRejoin,
+        ...(state.players.some(isBot) ? { botCount: state.players.filter(isBot).length } : {}),
       };
     }).filter((game) => game.status !== "finished");
     return NextResponse.json({ games });

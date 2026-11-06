@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "Rack'o",
+    "slug": "racko-offline",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F4F1E8"
+    },
+    "userInterfaceStyle": "light",
+    "scheme": "racko-offline",
+    "backgroundColor": "#F4F1E8",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "de.racko.offline"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#123D2D",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "de.racko.offline"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-status-bar"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "6e7c1a9c-de4b-4fff-a3af-13f7da973fed"
+      }
+    }
+  }
+}

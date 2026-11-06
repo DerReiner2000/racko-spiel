@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { ArrowDown, Copy, Crown, Layers3, LogIn, Plus, RotateCcw, Trophy, Users } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { GameView, LeaderboardEntry, ListedGame, PLAYER_NAMES, PlayerName } from "@/lib/types";
+import { canDeclareRacko, deckSizeFor } from "@/shared/game";
 
 type Session = { code: string; playerId: string; token: string };
 type Screen = "home" | "create" | "join" | "leaderboard" | "game";
@@ -26,6 +27,17 @@ export default function Home() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const activeSession = useRef<Session | null>(null);
+  const latestVersion = useRef(-1);
+  const submitting = useRef(false);
+
+  const acceptGame = useCallback((data: { game: GameView; version?: number }, active: Session) => {
+    const current = activeSession.current;
+    if (!current || current.code !== active.code || current.playerId !== active.playerId || current.token !== active.token) return;
+    if (data.version !== undefined && data.version < latestVersion.current) return;
+    if (data.version !== undefined) latestVersion.current = data.version;
+    setGame(data.game);
+  }, []);
 
   const loadGame = useCallback(async (active: Session, quiet = false) => {
     try {
@@ -34,23 +46,33 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "snapshot", ...active }),
       });
-      setGame(data.game);
+      acceptGame(data, active);
       if (!quiet) setError("");
     } catch (err) {
       if (!quiet) setError(err instanceof Error ? err.message : "Spiel konnte nicht geladen werden.");
     }
-  }, []);
+  }, [acceptGame]);
 
   useEffect(() => {
     const saved = localStorage.getItem("racko-session");
     if (!saved) return;
     try {
       const active = JSON.parse(saved) as Session;
+      activeSession.current = active;
+      latestVersion.current = -1;
       setSession(active);
       setScreen("game");
       loadGame(active);
     } catch { localStorage.removeItem("racko-session"); }
   }, [loadGame]);
+
+  useEffect(() => {
+    if (!session || screen !== "game" || game?.status !== "playing" || game.players[game.turnIndex]?.kind !== "bot") return;
+    // Recovery only. Normal bot turns are already executed by the server in
+    // the request that started them; any participant can resume an interrupted run.
+    const timer = setInterval(() => { if (!document.hidden) void loadGame(session, true); }, 2000);
+    return () => clearInterval(timer);
+  }, [session, screen, game?.status, game?.turnIndex, game?.players, loadGame]);
 
   useEffect(() => {
     if (!session || screen !== "game") return;
@@ -99,6 +121,8 @@ export default function Home() {
   }, [screen, name]);
 
   async function submit(action: string, extra: Record<string, unknown> = {}) {
+    if (submitting.current) return;
+    submitting.current = true;
     setBusy(true); setError("");
     try {
       let previousSession: Session | undefined;
@@ -110,15 +134,18 @@ export default function Home() {
       }
       const body = session ? { action, ...session, ...extra } : { action, ...extra, ...(previousSession ? { previousSession } : {}) };
       const data = await api("/api/game", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (session && (activeSession.current?.code !== session.code || activeSession.current?.token !== session.token)) return;
       if (data.playerId) {
         const active = { code: data.code, playerId: data.playerId, token: data.token };
+        activeSession.current = active;
+        latestVersion.current = -1;
         setSession(active); localStorage.setItem("racko-session", JSON.stringify(active));
         if (action === "create") localStorage.removeItem("racko-previous-session");
       }
-      if (data.game) setGame(data.game);
+      if (data.game && activeSession.current) acceptGame(data, activeSession.current);
       setScreen("game");
     } catch (err) { setError(err instanceof Error ? err.message : "Etwas ist schiefgelaufen."); }
-    finally { setBusy(false); }
+    finally { submitting.current = false; setBusy(false); }
   }
 
   async function showLeaderboard() {
@@ -136,6 +163,7 @@ export default function Home() {
 
   function leave() {
     if (session) localStorage.setItem("racko-previous-session", JSON.stringify(session));
+    activeSession.current = null; latestVersion.current = -1;
     localStorage.removeItem("racko-session"); setSession(null); setGame(null); setScreen("home"); setError("");
   }
 
@@ -187,6 +215,7 @@ export default function Home() {
 function Game({ game, busy, error, act, leave }: { game: GameView; busy: boolean; error: string; act: (action: string, extra?: Record<string, unknown>) => void; leave: () => void }) {
   const [pendingRackoSlot, setPendingRackoSlot] = useState<number | null>(null);
   const [selectedPlayerId, setSelectedPlayerId] = useState<string>(game.myPlayerId);
+  const [newBotDifficulty, setNewBotDifficulty] = useState<"easy" | "medium">("easy");
   const me = game.players.find((player) => player.id === game.myPlayerId)!;
   const current = game.players[game.turnIndex];
   const topDiscard = game.discard.at(-1);
@@ -196,7 +225,14 @@ function Game({ game, busy, error, act, leave }: { game: GameView; busy: boolean
     <span className="eyebrow">WARTERAUM</span><h1>Lobby {game.code}</h1><p>2 bis 4 Spieler können teilnehmen. Der Gastgeber entscheidet, wann es losgeht.</p>
     <button className="invite-code" onClick={copyCode}>{game.code}<Copy size={20}/></button>
     {game.directRunRequirement ? <p className="lobby-rule">Zusatzregel: direkte Folge aus mindestens {game.directRunRequirement} Karten</p> : <p className="lobby-rule">Klassische Rack’o-Regel</p>}
-    <div className="seats">{Array.from({ length: 4 }, (_, i) => game.players[i] ? <div className="seat filled" key={i}><span>{game.players[i].name[0]}</span><strong>{game.players[i].name}</strong>{game.players[i].id === game.hostId && <small>Gastgeber</small>}</div> : <div className="seat" key={i}><span><Users/></span><strong>Freier Platz</strong><small>wartet …</small></div>)}</div>
+    <div className="seats">{Array.from({ length: 4 }, (_, i) => {
+      const player = game.players[i];
+      return player ? <div className={`seat filled ${player.kind === "bot" ? "bot-seat" : ""}`} key={player.id}><span>{player.kind === "bot" ? "⚙" : player.name[0]}</span><strong>{player.name}</strong>{player.id === game.hostId && <small>Gastgeber</small>}{player.kind === "bot" && <>
+        {game.isHost ? <><label className="bot-level"><span>Schwierigkeit</span><select aria-label={`Schwierigkeit von ${player.name}`} disabled={busy} value={player.botDifficulty} onChange={(event) => act("configureBot", { botId: player.id, difficulty: event.target.value })}><option value="easy">Leicht</option><option value="medium">Mittel</option></select></label><button className="remove-bot" disabled={busy} onClick={() => act("removeBot", { botId: player.id })}>Entfernen</button></> : <small>Bot · {player.botDifficulty === "easy" ? "Leicht" : "Mittel"}</small>}
+      </>}</div> : <div className="seat" key={i}><span><Users/></span><strong>Freier Platz</strong><small>wartet …</small></div>;
+    })}</div>
+    {game.isHost && game.players.length < 4 && <div className="bot-controls"><label>Bot hinzufügen<select disabled={busy} value={newBotDifficulty} onChange={(event) => setNewBotDifficulty(event.target.value as "easy" | "medium")}><option value="easy">Leicht</option><option value="medium">Mittel</option></select></label><button className="main-button" disabled={busy} onClick={() => act("addBot", { difficulty: newBotDifficulty })}><Plus size={17}/> Bot hinzufügen</button></div>}
+    {game.statisticsMode === "training" && <p className="bot-training-note">Trainingspartie mit Bots · ohne Wertung in der Rangliste</p>}
     {game.isHost ? <button className="main-button" disabled={game.players.length < 2 || busy} onClick={() => act("start")}>{game.players.length >= 2 ? `Mit ${game.players.length} Spielern starten` : "Noch 1 Spieler benötigt"}</button> : <p className="waiting">Der Gastgeber startet das Spiel mit 2 bis 4 Spielern.</p>}
     {error && <p className="error">{error}</p>}
   </section></main>;
@@ -211,9 +247,10 @@ function Game({ game, busy, error, act, leave }: { game: GameView; busy: boolean
     return <main className="game-shell"><GameHeader game={game} leave={leave}/><PlayerStrip game={game} selectedPlayerId={selected.id} onSelect={setSelectedPlayerId}/><section className={`results panel ${isFinished ? "final-results" : "round-results"}`}>
     <Crown size={38}/><span className="eyebrow">{isFinished ? "SPIEL BEENDET" : `ERGEBNIS RUNDE ${game.currentRound}`}</span>
     <h1>{isFinished ? `${game.players.filter((p) => game.gameWinnerIds.includes(p.id)).map((p) => p.name).join(" & ")} gewinnt!` : game.message}</h1>
+    {game.statisticsMode === "training" && <p className="bot-match-note">Trainingspartie · kein Eintrag in der Rangliste</p>}
     <p className="result-heading">{isFinished ? "Gesamtpunkte des Spiels" : "Punkte dieser Runde"}</p>
     <div className="result-list">{rankedPlayers.map((player, index) => { const result = game.roundResults.find((r) => r.playerId === player.id); const displayedScore = isFinished ? player.totalScore : result?.total ?? 0; return <div className="result-row" key={player.id}><span>{index + 1}</span><strong>{player.name}</strong><div className="result-score"><small>{isFinished ? "Gesamt" : "Diese Runde"}</small><b>{isFinished ? displayedScore : `+${displayedScore}`} <em>Pkt.</em></b></div></div> })}</div>
-    <div className="revealed-hand"><p><strong>{selected.name}s Karten</strong><span>Spieler oben auswählen</span></p><div className="result-cards">{selected.hand?.map((card, index) => <PlayingCard card={card} maxCard={game.playerCount === 2 ? 50 : game.playerCount === 3 ? 60 : 75} key={index}/>)}</div></div>
+    <div className="revealed-hand"><p><strong>{selected.name}s Karten</strong><span>Spieler oben auswählen</span></p><div className="result-cards">{selected.hand?.map((card, index) => <PlayingCard card={card} maxCard={deckSizeFor(game.playerCount)} key={index}/>)}</div></div>
     {game.status === "round_end" && game.currentRound < game.totalRounds && game.isHost && <button className="main-button" disabled={busy} onClick={() => act("nextRound")}>Nächste Runde</button>}
     {game.status === "round_end" && game.currentRound < game.totalRounds && !game.isHost && <p className="waiting">Warte auf den Gastgeber …</p>}
     {game.status === "round_end" && game.currentRound >= game.totalRounds && <div className="game-ending-actions">
@@ -232,11 +269,9 @@ function Game({ game, busy, error, act, leave }: { game: GameView; busy: boolean
       <div className="portrait-board">
         <section className="rack-section"><div className="rack-label"><p>Deine Karten</p><div className="turn-message"><span className={game.isMyTurn ? "pulse" : ""}/>{game.isMyTurn ? "Du bist am Zug" : `${current?.name} ist am Zug`}</div></div><div className="rack">{me.hand?.map((card, index) => <button style={{ zIndex: index + 1 }} aria-label={`Karte ${card} auf Platz ${index + 1}`} disabled={!game.isMyTurn || game.drawnCard === null || busy || pendingRackoSlot !== null} onClick={() => {
           const nextHand = me.hand!.map((value, slot) => slot === index ? game.drawnCard! : value);
-          const fromFront = [...nextHand].reverse();
-          const longest = getLongestRun(fromFront);
-          if (fromFront.every((value, slot) => slot === 0 || fromFront[slot - 1] < value) && (!(game.directRunRequirement ?? 0) || longest >= game.directRunRequirement)) setPendingRackoSlot(index);
+          if (canDeclareRacko(nextHand, game.directRunRequirement ?? 0)) setPendingRackoSlot(index);
           else act("swap", { slot: index, declareRacko: false });
-        }} key={index}><PlayingCard card={card} maxCard={game.playerCount === 2 ? 50 : game.playerCount === 3 ? 60 : 75}/></button>)}</div></section>
+        }} key={index}><PlayingCard card={card} maxCard={deckSizeFor(game.playerCount)}/></button>)}</div></section>
         <div className="piles">
           <div className={`drawn active-card ${game.drawnCard === null ? "empty-card" : ""}`}><span>AKTIVE KARTE</span>{game.drawnCard !== null && game.isMyTurn ? <><b>{game.drawnCard}</b><small>Links einen Platz wählen</small>{game.drawnFrom === "deck" && <button disabled={busy} onClick={() => act("discard")}>Ablegen</button>}</> : <small className="empty-hint">Noch keine Karte gezogen</small>}</div>
           <button className="pile deck" disabled={!game.isMyTurn || game.drawnCard !== null || game.awaitingRacko || busy} onClick={() => act("draw", { source: "deck" })}>{game.isMyTurn && game.drawnCard === null && !game.awaitingRacko && !busy && <span className="draw-prompt">AUSWÄHLEN</span>}<Layers3/><strong>Verdeckt</strong><small>{game.deckCount} Karten</small></button>
@@ -244,7 +279,7 @@ function Game({ game, busy, error, act, leave }: { game: GameView; busy: boolean
         </div>
       </div>
       {pendingRackoSlot !== null && <div className="racko-overlay"><div className="racko-call"><Crown/><p>Deine Reihe ist vollständig.</p><strong>Möchtest du Rack’o sagen?</strong><button disabled={busy} onClick={() => { act("swap", { slot: pendingRackoSlot, declareRacko: true }); setPendingRackoSlot(null); }}><Crown/> RACK’O!</button><button className="continue" disabled={busy} onClick={() => { act("swap", { slot: pendingRackoSlot, declareRacko: false }); setPendingRackoSlot(null); }}><RotateCcw/> Für Bonus weiterspielen</button></div></div>}
-      {game.isMyTurn && !game.awaitingRacko && game.drawnCard === null && me.hand && canRackoLocally(me.hand, game.directRunRequirement ?? 0) && <button className="floating-racko" disabled={busy} onClick={() => act("racko")}><Crown/> Rack’o ausrufen</button>}
+      {game.isMyTurn && !game.awaitingRacko && game.drawnCard === null && me.hand && canDeclareRacko(me.hand, game.directRunRequirement ?? 0) && <button className="floating-racko" disabled={busy} onClick={() => act("racko")}><Crown/> Rack’o ausrufen</button>}
       {error && <p className="error game-error">{error}</p>}
     </section>
   </main>;
@@ -253,23 +288,8 @@ function Game({ game, busy, error, act, leave }: { game: GameView; busy: boolean
 function GameBrowser({ games, name, onJoin, onRefresh, busy }: { games: ListedGame[]; name: PlayerName; onJoin: (code: string) => void; onRefresh: () => void; busy: boolean }) {
   const waiting = games.filter((game) => game.status === "lobby");
   const started = games.filter((game) => game.status !== "lobby" && game.status !== "finished");
-  const section = (title: string, items: ListedGame[], startedGames = false) => <div className="game-list-section"><h3>{title}<span>{items.length}</span></h3>{items.length ? <div className="game-list">{items.map((game) => <article className="listed-game" key={game.code}><div className="lobby-code"><small>LOBBY</small><strong>{game.code}</strong></div><div className="listed-game-info"><strong>{game.hostName}s Spiel</strong><span>{game.playerNames.join(", ")}</span><small>{game.playerCount}/4 Spieler · {game.totalRounds} Runden{game.directRunRequirement ? ` · ${game.directRunRequirement}er-Folge` : " · Klassisch"}</small></div><button disabled={busy || (startedGames ? !game.canRejoin : !game.canJoin && !game.canRejoin)} onClick={() => onJoin(game.code)}>{game.canRejoin ? "Wieder beitreten" : startedGames ? "Nicht teilgenommen" : "Beitreten"}</button></article>)}</div> : <p className="empty">Keine Spiele in diesem Bereich.</p>}</div>;
+  const section = (title: string, items: ListedGame[], startedGames = false) => <div className="game-list-section"><h3>{title}<span>{items.length}</span></h3>{items.length ? <div className="game-list">{items.map((game) => <article className="listed-game" key={game.code}><div className="lobby-code"><small>LOBBY</small><strong>{game.code}</strong></div><div className="listed-game-info"><strong>{game.hostName}s Spiel</strong><span>{game.playerNames.join(", ")}</span><small>{game.playerCount}/4 Spieler · {game.totalRounds} Runden{game.directRunRequirement ? ` · ${game.directRunRequirement}er-Folge` : " · Klassisch"}{game.botCount ? " · Training mit Bots" : ""}</small></div><button disabled={busy || (startedGames ? !game.canRejoin : !game.canJoin && !game.canRejoin)} onClick={() => onJoin(game.code)}>{game.canRejoin ? "Wieder beitreten" : startedGames ? "Nicht teilgenommen" : "Beitreten"}</button></article>)}</div> : <p className="empty">Keine Spiele in diesem Bereich.</p>}</div>;
   return <div className="game-browser"><div className="browser-heading"><p>Verfügbare Spiele für <strong>{name}</strong></p><button type="button" onClick={onRefresh} disabled={busy}>Aktualisieren</button></div>{section("Im Wartebereich", waiting)}{section("Bereits begonnen", started, true)}</div>;
-}
-
-function getLongestRun(cards: number[]) {
-  let longest = cards.length ? 1 : 0;
-  let current = longest;
-  for (let i = 1; i < cards.length; i++) {
-    current = cards[i] === cards[i - 1] + 1 ? current + 1 : 1;
-    longest = Math.max(longest, current);
-  }
-  return longest;
-}
-
-function canRackoLocally(hand: number[], requirement: 0 | 3 | 4) {
-  const cards = [...hand].reverse();
-  return cards.every((card, index) => index === 0 || cards[index - 1] < card) && (!requirement || getLongestRun(cards) >= requirement);
 }
 
 function PlayingCard({ card, maxCard }: { card: number; maxCard: number }) {
@@ -284,9 +304,9 @@ function PlayingCard({ card, maxCard }: { card: number; maxCard: number }) {
 
 function PlayerStrip({ game, selectedPlayerId, onSelect }: { game: GameView; selectedPlayerId?: string; onSelect?: (id: string) => void }) {
   const current = game.players[game.turnIndex];
-  return <section className={`score-strip ${onSelect ? "selectable" : ""}`}>{game.players.map((player) => <button disabled={!onSelect} onClick={() => onSelect?.(player.id)} className={`${player.id === current?.id && game.status === "playing" ? "current" : ""} ${player.id === selectedPlayerId ? "selected" : ""}`} key={player.id}><span>{player.name[0]}</span><p><strong>{player.name}</strong><small>{player.totalScore} Punkte</small></p>{player.id === current?.id && game.status === "playing" && <b>AM ZUG</b>}</button>)}</section>;
+  return <section className={`score-strip ${onSelect ? "selectable" : ""}`}>{game.players.map((player) => <button disabled={!onSelect} onClick={() => onSelect?.(player.id)} className={`${player.id === current?.id && game.status === "playing" ? "current" : ""} ${player.id === selectedPlayerId ? "selected" : ""}`} key={player.id}><span>{player.name[0]}</span><p><strong>{player.name}</strong><small>{player.totalScore} Punkte{player.kind === "bot" ? ` · ${player.botDifficulty === "easy" ? "Leicht" : "Mittel"}` : ""}</small></p>{player.id === current?.id && game.status === "playing" && <b>AM ZUG</b>}</button>)}</section>;
 }
 
 function GameHeader({ game, leave }: { game: GameView; leave: () => void }) {
-  return <header className="game-header"><div className="brand"><div className="brand-mark"><Layers3 size={20}/></div><span>Rack’o</span></div><div className="round-info">Runde <strong>{game.currentRound}</strong> / {game.totalRounds}<i/>Code <strong>{game.code}</strong></div><button onClick={leave}>Verlassen</button></header>;
+  return <header className="game-header"><div className="brand"><div className="brand-mark"><Layers3 size={20}/></div><span>Rack’o</span></div><div className="round-info">Runde <strong>{game.currentRound}</strong> / {game.totalRounds}<i/>Code <strong>{game.code}</strong>{game.statisticsMode === "training" && <span className="bot-tag">Training</span>}</div><button onClick={leave}>Verlassen</button></header>;
 }

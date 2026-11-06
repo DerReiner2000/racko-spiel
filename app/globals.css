@@ -67,6 +67,21 @@
 .portrait-board .rack button:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
 @media(max-width:760px){.portrait-board .piles{gap:22px}}
 
+/* Optional bots extend the existing waiting room; the card table stays intact. */
+.lobby-card .bot-controls{display:flex;gap:12px;align-items:flex-end;margin:16px 0 12px;text-align:left}
+.bot-controls label{display:grid;gap:7px;flex:1;font-size:12px;font-weight:800;color:#dbe9e1}
+.bot-controls select,.bot-level select{min-height:40px;border:1px solid #b7c9bd;border-radius:9px;padding:7px 10px;background:#fff;color:var(--green);font-weight:800;max-width:100%}
+.bot-controls .main-button{width:auto;display:flex;align-items:center;justify-content:center;gap:7px;background:var(--gold);color:var(--green)}
+.seat.bot-seat{border-color:#e7b84d88;min-width:0}
+.seat .bot-level{display:grid;gap:4px;width:100%;margin-top:5px;text-align:center}
+.seat .bot-level>span{font-size:9px;color:#65746b;background:none;width:auto;height:auto;display:block}
+.seat .bot-level select{width:100%;font-size:12px;min-width:0}
+.seat .remove-bot{border:0;background:transparent;color:#8b4934;font-size:11px;font-weight:800;cursor:pointer;margin-top:7px;padding:5px}
+.lobby-card .bot-training-note{font-size:12px;color:#f0d88b;margin:14px 0}
+.bot-tag{font-size:9px;font-weight:800;color:#8a681c;white-space:nowrap}
+.bot-match-note{margin:8px 0;color:#718078;font-size:12px}
+@media(max-width:560px){.lobby-card .bot-controls{flex-direction:column;align-items:stretch}.bot-controls .main-button{width:100%}}
+
 /* Die aktuelle Rundenwertung steht im Mittelpunkt; der Gesamtstand bleibt oben. */
 .results .result-heading{margin:24px 0 8px;color:#69766e;font-size:12px;font-weight:900;letter-spacing:1.4px;text-transform:uppercase}.results .result-list{display:grid;gap:10px;margin-top:12px}.results .result-row{grid-template-columns:38px 1fr auto;border:1px solid #dfe5df;border-radius:14px;background:#fff;padding:13px 16px;box-shadow:0 4px 12px #173d2e0c}.results .result-row>span{width:30px;height:30px}.results .result-row>strong{font:800 19px var(--font-display)}.results .result-score{min-width:116px;border-radius:11px;background:var(--mint);padding:8px 12px;text-align:right}.results .result-score small{display:block;color:#65746b;font-size:9px;font-weight:900;letter-spacing:.8px;text-transform:uppercase}.results .result-score b{display:block;color:var(--green);font:900 28px/1 var(--font-display)}.results .result-score em{font:900 10px var(--font-body);font-style:normal}.round-results .result-row:first-child{border-color:var(--gold);background:#fffaf0}.round-results .result-row:first-child .result-score,.final-results .result-row:first-child .result-score{background:var(--gold)}.final-results .result-row:first-child{border-color:var(--gold)}
 @media(max-width:760px){.results .result-heading{margin-top:20px}.results .result-list{gap:8px}.results .result-row{grid-template-columns:32px 1fr auto;padding:10px}.results .result-row>strong{font-size:17px}.results .result-score{min-width:104px;padding:7px 9px}.results .result-score small{display:block;font-size:8px}.results .result-score b{font-size:25px}}

@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "noEmit": false,
+    "incremental": false,
+    "rootDir": "..",
+    "plugins": []
+  },
+  "include": ["*.test.ts", "../app/api/game/route.ts", "../app/api/mobile-config/route.ts"],
+  "exclude": ["../node_modules", "../racko-offline-app/node_modules"]
+}

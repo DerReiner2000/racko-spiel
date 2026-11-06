@@ -1,0 +1,5 @@
+{
+  "extends": "../tests/tsconfig.json",
+  "include": ["bot-simulation.ts"],
+  "exclude": ["../node_modules", "../racko-offline-app/node_modules"]
+}

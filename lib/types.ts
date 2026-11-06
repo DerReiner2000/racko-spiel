@@ -1,86 +1,42 @@
-export const PLAYER_NAMES = ["Max", "Tom", "Claudia", "Hannes", "Marleen", "Clara", "Ralf", "Sabine", "Gast 1", "Gast 2", "Gast 3"] as const;
+import { PLAYER_NAMES } from "../shared/game";
+import type { CoreGameState, CorePlayer, CoreRoundResult } from "../shared/game";
+import type { OnlineBotDifficulty, PlayerName } from "../shared/online";
+import type { BotObservation, BotPublicEvent } from "../shared/bots";
 
-export type PlayerName = (typeof PLAYER_NAMES)[number];
-export type GameStatus = "lobby" | "playing" | "round_end" | "finished";
+export { PLAYER_NAMES };
+export type { GameStatus } from "../shared/game";
 
-export interface PlayerState {
-  id: string;
+export type { GameView, LeaderboardEntry, ListedGame, PlayerName, PublicPlayer } from "../shared/online";
+
+export interface HumanPlayerState extends CorePlayer {
+  kind?: "human";
   name: PlayerName;
   token: string;
   connectedAt: string;
-  hand: number[];
-  roundScore: number;
-  totalScore: number;
-  rackos: number;
 }
 
-export interface RoundResult {
-  playerId: string;
-  name: PlayerName;
-  hand: number[];
-  basePoints: number;
-  winnerPoints: number;
-  bonusPoints: number;
-  total: number;
+export interface BotPlayerState extends CorePlayer {
+  kind: "bot";
+  botSettings: { difficulty: OnlineBotDifficulty; considerMatchScore: false };
+  strategyId: string;
+  token?: never;
+  connectedAt?: never;
 }
 
-export interface GameState {
+export type PlayerState = HumanPlayerState | BotPlayerState;
+export type RoundResult = CoreRoundResult;
+
+export interface BotRoundState {
+  id: string;
+  events: BotPublicEvent[];
+  historyComplete: boolean;
+  initialObservations: Record<string, BotObservation>;
+}
+
+export interface GameState extends CoreGameState<PlayerState> {
   code: string;
   hostId: string;
-  playerCount: 2 | 3 | 4;
-  directRunRequirement: 0 | 3 | 4;
-  totalRounds: number;
-  currentRound: number;
-  startingPlayerIndex: number;
-  status: GameStatus;
-  players: PlayerState[];
-  deck: number[];
-  discard: number[];
-  turnIndex: number;
-  drawnCard: number | null;
-  drawnFrom: "deck" | "discard" | null;
   awaitingRacko: boolean;
-  roundResults: RoundResult[];
-  extraRoundVotes?: string[];
-  gameWinnerIds: string[];
-  message: string;
-}
-
-export interface ListedGame {
-  code: string;
-  hostName: PlayerName;
-  status: GameStatus;
-  playerNames: PlayerName[];
-  playerCount: number;
-  totalRounds: number;
-  directRunRequirement: 0 | 3 | 4;
-  canJoin: boolean;
-  canRejoin: boolean;
-}
-
-export interface PublicPlayer {
-  id: string;
-  name: PlayerName;
-  roundScore: number;
-  totalScore: number;
-  rackos: number;
-  hand?: number[];
-}
-
-export interface GameView extends Omit<GameState, "players" | "deck"> {
-  players: PublicPlayer[];
-  deckCount: number;
-  isHost: boolean;
-  isMyTurn: boolean;
-  myPlayerId: string;
-}
-
-export interface LeaderboardEntry {
-  player_name: PlayerName;
-  games_played: number;
-  rounds_played: number;
-  wins: number;
-  total_points: number;
-  average_per_round: number;
-  average_per_game: number;
+  /** Private adapter state. Never include in a browser/mobile response. */
+  botRound?: BotRoundState;
 }
